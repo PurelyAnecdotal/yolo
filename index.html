@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YOLO Object Detection</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss/2.2.19/tailwind.min.js"></script>
+    <style>
+        .detection-box {
+            position: absolute;
+            border: 2px solid #00ff00;
+            pointer-events: none;
+        }
+
+        .detection-label {
+            position: absolute;
+            background-color: #00ff00;
+            color: white;
+            padding: 2px 6px;
+            font-size: 12px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 min-h-screen p-8">
+    <div class="max-w-4xl mx-auto">
+        <h1 class="text-3xl font-bold text-center mb-8">YOLO Object Detection</h1>
+
+        <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Image Upload Section -->
+                <div class="space-y-4">
+                    <h2 class="text-xl font-semibold">Upload Image</h2>
+                    <input type="file" accept="image/*" class="w-full p-2 border rounded" id="fileInput">
+                </div>
+
+                <!-- Camera Capture Section -->
+                <div class="space-y-4">
+                    <h2 class="text-xl font-semibold">Take Picture</h2>
+                    <button onclick="startCamera()" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">
+                        Start Camera
+                    </button>
+                    <button onclick="stopCamera()" class="bg-red-500 text-white px-4 py-2 rounded hover:bg-red-600">
+                        Stop Camera
+                    </button>
+                    <button onclick="takePicture()"
+                        class="bg-green-500 text-white px-4 py-2 rounded hover:bg-green-600">
+                        Take Picture
+                    </button>
+                </div>
+            </div>
+
+            <!-- Preview Area -->
+            <div class="mt-6 space-y-4">
+                <h2 class="text-xl font-semibold">Preview</h2>
+                <div class="relative">
+                    <video id="video" class="w-full hidden"></video>
+                    <canvas id="canvas" class="w-full"></canvas>
+                    <div id="detections"></div>
+                </div>
+            </div>
+
+            <!-- Results Section -->
+            <div class="mt-6">
+                <h2 class="text-xl font-semibold mb-4">Detection Results</h2>
+                <pre id="results" class="bg-gray-100 p-4 rounded overflow-auto max-h-60"></pre>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const fileInput = document.getElementById('fileInput');
+        const resultsDiv = document.getElementById('results');
+        const detectionsDiv = document.getElementById('detections');
+        let stream = null;
+
+        // Handle file upload
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.onload = () => {
+                        // Set canvas size to match image
+                        canvas.width = img.width;
+                        canvas.height = img.height;
+                        ctx.drawImage(img, 0, 0);
+                        sendImageToAPI(file);
+                    };
+                    img.src = event.target.result;
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        // Camera functions
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment' }
+                });
+                video.srcObject = stream;
+                video.classList.remove('hidden');
+                video.play();
+
+                // Set canvas size to match video
+                video.addEventListener('loadedmetadata', () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                });
+            } catch (err) {
+                console.error('Error accessing camera:', err);
+                alert('Error accessing camera. Please make sure you have granted camera permissions.');
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                video.classList.add('hidden');
+            }
+        }
+
+        function takePicture() {
+            if (stream) {
+                // Draw current video frame to canvas
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+                // Convert canvas to blob and send to API
+                canvas.toBlob((blob) => {
+                    const file = new File([blob], "camera-capture.jpg", { type: "image/jpeg" });
+                    sendImageToAPI(file);
+                }, 'image/jpeg');
+            }
+        }
+
+        // API interaction
+        async function sendImageToAPI(file) {
+            try {
+                // Clear previous detections
+                detectionsDiv.innerHTML = '';
+                resultsDiv.textContent = 'Processing...';
+
+                const formData = new FormData();
+                formData.append('file', file);
+
+                const response = await fetch('http://localhost:8000/detect', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    // Display JSON results
+                    resultsDiv.textContent = JSON.stringify(data, null, 2);
+
+                    // Draw bounding boxes
+                    const scale = canvas.width / canvas.offsetWidth;
+                    data.detections.forEach(detection => {
+                        const [x1, y1, x2, y2] = detection.bbox;
+
+                        // Create bounding box
+                        const box = document.createElement('div');
+                        box.className = 'detection-box';
+                        box.style.left = `${x1 / scale}px`;
+                        box.style.top = `${y1 / scale}px`;
+                        box.style.width = `${(x2 - x1) / scale}px`;
+                        box.style.height = `${(y2 - y1) / scale}px`;
+
+                        // Create label
+                        const label = document.createElement('div');
+                        label.className = 'detection-label';
+                        label.style.left = `${x1 / scale}px`;
+                        label.style.top = `${y1 / scale - 20}px`;
+                        label.textContent = `${detection.class} ${Math.round(detection.confidence * 100)}%`;
+
+                        detectionsDiv.appendChild(box);
+                        detectionsDiv.appendChild(label);
+                    });
+                } else {
+                    resultsDiv.textContent = 'Error: ' + data.error;
+                }
+            } catch (error) {
+                console.error('Error:', error);
+                resultsDiv.textContent = 'Error processing image: ' + error.message;
+            }
+        }
+    </script>
+</body>
+
+</html>
